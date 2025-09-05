@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SMES CSV Explorateur</title>
+<style>
+/* --- Global --- */
+body {
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #fff8f5;
+    margin: 0;
+    padding: 0;
+    color: #333;
+    font-size: 14px;
+    display: flex;
+    height: 100vh;
+}
+
+/* --- Sidebar --- */
+#sidebar {
+    width: 300px;
+    background-color: #fbe9e7;
+    border-right: 2px solid #e53935;
+    padding: 20px 10px;
+    overflow-y: auto;
+}
+#sidebar h2 { color: #e53935; margin-top:0; text-align:center; }
+#folderTree ul { list-style: none; padding-left: 20px; }
+#folderTree li { cursor: pointer; margin: 5px 0; }
+#folderTree li span { margin-left: 5px; }
+.folder-toggle { font-weight: bold; margin-right: 5px; cursor: pointer; color: #e53935; }
+.active-folder { background-color: #ffccbc; border-radius: 3px; padding: 2px 4px; }
+
+/* --- Main --- */
+#main {
+    flex: 1;
+    padding: 10px 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* --- Header --- */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    margin-bottom: 15px;
+}
+.header .logo { height: 60px; width: auto; }
+#fileNameContainer {
+    position: absolute;
+    right: 0;
+    top: 0;
+    text-align: right;
+}
+#fileName, #lineCount {
+    color: #800000;
+}
+#fileName {
+    font-size: 20px;
+    font-weight: bold;
+    white-space: nowrap;
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: none;
+}
+#lineCount { font-size: 12px; display: none; }
+
+/* --- Controls --- */
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.controls button, #toggleColumnsBtn {
+    background-color: #e53935;
+    color: white;
+    border: none;
+    cursor: pointer;
+    font-weight: bold;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    transition: background-color 0.3s ease, transform 0.2s ease;
+}
+.controls button:hover, #toggleColumnsBtn:hover { background-color: #c62828; transform: scale(1.05); }
+.controls input[type="date"] { padding:5px; }
+
+/* --- Table --- */
+#tableWrapper { flex: 1; overflow:auto; }
+#tableContainer { overflow:auto; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); background:white; }
+table { border-collapse: separate; border-spacing:0; width:100%; font-size:13px; table-layout:auto; }
+thead th, tbody td { padding:10px 12px; text-align:left; border-bottom:1px solid #eee; white-space:nowrap; }
+thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background-color:#e53935;
+    color:white;
+    font-weight:bold;
+    text-transform:uppercase;
+    cursor:pointer;
+}
+tbody tr:nth-child(even){ background-color:#fbe9e7; }
+tbody tr:nth-child(odd){ background-color:#ffffff; }
+tbody tr:hover{ background-color:#ffccbc; }
+
+/* --- Column toggles --- */
+#columnToggles { display:none; flex-wrap:wrap; gap:5px; margin-bottom:10px; }
+#columnToggles label { font-size:12px; cursor:pointer; }
+#columnToggles input[type="checkbox"] { width:14px; height:14px; vertical-align:middle; margin-right:3px; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h2>Dossiers</h2>
+    <ul id="folderTree">
+        <li data-path=""><span>Tous les fichiers</span></li>
+    </ul>
+</div>
+
+<div id="main">
+    <div class="header">
+        <img src="img/logo.png" alt="Logo SMES France" class="logo" />
+        <div id="fileNameContainer">
+            <div id="fileName"></div>
+            <div id="lineCount"></div>
+        </div>
+    </div>
+
+    <div class="controls">
+        Filtrer par date :
+        <input type="date" id="startDate"> à <input type="date" id="endDate">
+        <button onclick="applyFilter()">Filtrer</button>
+        <button onclick="clearFilter()">Tout afficher</button>
+    </div>
+
+    <div id="columnToggles"></div>
+    <div id="tableWrapper">
+        <div id="tableContainer">
+            <table id="csvTable">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Nom du fichier</th>
+                        <th>Dossier</th>
+                        <th>Télécharger</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="4">Chargement...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+/* --- JS Google Drive CSV (inchangé, juste style) --- */
+const API_KEY='AIzaSyCbEV3CS9bOcxq5eK-QXbjczGHjvzyXS6M';
+const FOLDER_ID='1Ad-i4aB9zqYunpQMLQi8mX4wwcfil18B';
+let allFiles=[], folderStructure={}, currentPath='';
+
+async function fetchCSVFiles(folderId,path=''){
+    const files=[];
+    async function listFiles(currentFolderId,currentPath){
+        const url=`https://www.googleapis.com/drive/v3/files?q='${currentFolderId}'+in+parents+and+trashed=false&key=${API_KEY}&fields=files(id,name,mimeType)`;
+        const response=await fetch(url);
+        const data=await response.json();
+        for(const file of data.files){
+            if(file.mimeType==='application/vnd.google-apps.folder'){
+                addFolderToStructure(currentPath,file.name);
+                await listFiles(file.id,currentPath+file.name+'/');
+            } else if(file.name.endsWith('.csv')){
+                files.push({id:file.id,name:file.name,path:currentPath});
+            }
+        }
+    }
+    await listFiles(folderId,path);
+    return files;
+}
+
+function addFolderToStructure(basePath,folderName){
+    const parts=(basePath+folderName).split('/').filter(Boolean);
+    let node=folderStructure;
+    for(const part of parts){ if(!node[part]) node[part]={}; node=node[part]; }
+}
+
+function buildTree(container,structure,path=''){
+    const ul=document.createElement('ul');
+    for(const key in structure){
+        const li=document.createElement('li');
+        const spanToggle=document.createElement('span'); spanToggle.textContent='+'; spanToggle.className='folder-toggle';
+        const spanName=document.createElement('span'); spanName.textContent=key;
+        li.appendChild(spanToggle); li.appendChild(spanName);
+        li.dataset.path=path+key+'/';
+        spanName.onclick=()=>{ currentPath=li.dataset.path; highlightFolder(li); clearFilter(); };
+        spanToggle.onclick=()=>{ 
+            if(li.querySelector('ul')){ li.removeChild(li.querySelector('ul')); spanToggle.textContent='+'; } 
+            else{ const subUl=buildTree(li,structure[key],li.dataset.path); li.appendChild(subUl); spanToggle.textContent='–'; } 
+        };
+        ul.appendChild(li);
+    }
+    return ul;
+}
+
+function highlightFolder(selectedLi){
+    document.querySelectorAll('#folderTree li span:nth-child(2)').forEach(span=>span.classList.remove('active-folder'));
+    const spanName=selectedLi.querySelector('span:nth-child(2)');
+    if(spanName) spanName.classList.add('active-folder');
+}
+
+function extractDate(filename){ const match=filename.match(/(\d{8})\.csv$/); return match?match[1]:'00000000'; }
+function formatDate(dateStr){ return `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`; }
+
+function displayFiles(files){
+    const tbody=document.querySelector('#csvTable tbody'); tbody.innerHTML='';
+    files.forEach(file=>{
+        const date=formatDate(extractDate(file.name));
+        const row=document.createElement('tr');
+        row.innerHTML=`<td>${date}</td><td>${file.name}</td><td>${file.path}</td><td><a href="https://drive.google.com/uc?export=download&id=${file.id}" target="_blank"><button>Télécharger</button></a></td>`;
+        tbody.appendChild(row);
+    });
+    if(files.length===0){ tbody.innerHTML='<tr><td colspan="4">Aucun CSV trouvé pour ce filtre</td></tr>'; }
+}
+
+function applyFilter(){
+    const start=document.getElementById('startDate').value;
+    const end=document.getElementById('endDate').value;
+    const filtered=allFiles.filter(file=>{
+        const fileDate=formatDate(extractDate(file.name));
+        if(start&&fileDate<start) return false;
+        if(end&&fileDate>end) return false;
+        if(currentPath&&!file.path.startsWith(currentPath)) return false;
+        return true;
+    });
+    displayFiles(filtered);
+}
+
+function clearFilter(){
+    document.getElementById('startDate').value='';
+    document.getElementById('endDate').value='';
+    displayFiles(allFiles.filter(f=>!currentPath||f.path.startsWith(currentPath)));
+}
+
+async function init(){
+    allFiles=await fetchCSVFiles(FOLDER_ID);
+    allFiles.sort((a,b)=>extractDate(b.name)-extractDate(a.name));
+    displayFiles(allFiles);
+    const treeContainer=document.getElementById('folderTree');
+    const rootLi=treeContainer.querySelector('li[data-path=""]');
+    const treeUl=buildTree(rootLi,folderStructure);
+    rootLi.appendChild(treeUl);
+    highlightFolder(rootLi);
+}
+init();
+</script>
+</body>
+</html>
